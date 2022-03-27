@@ -1,0 +1,157 @@
+load  "ppm2rnm"
+
+bool debug = true;
+
+real c = 1;
+
+string fA = "bl_bask10_0.pgm";
+string fB = "bl_bask11_0.pgm";
+real[int,int] brightA(fA);   
+real[int,int] brightB(fB);
+int ny = brightA.n, nx = brightA.m; //defined that way because of difference between matrix coordinate and image coordinate
+real[int] bvA = c*brightA; //brightness vector holds all brightness values in the picture from left to right, top to bottom
+real[int] bvB = c*brightB; 
+
+
+real a = 0.25;
+int tri1 = 50;
+int tri2;
+tri2 = floor(nx*tri1/ny);
+
+// Define mesh boundary
+border C1(t=0,ny){x=t;y=0;}
+border C2(t=0,nx){x=ny;y=t;}
+border C3(t=ny,0){x=t;y=nx;}
+border C4(t=nx,0){x=0;y=t;}
+
+// The triangulated domain Th is on the left side of its boundary
+mesh Th = square(tri1,tri2,[ny*x, nx*y]);
+//mesh Th = buildmesh(C1(tri1)+C2(tri2)+C3(tri1)+C4(tri2));
+plot(Th,wait=debug);
+
+// The finite element space defined over Th is called here Vh
+fespace Vh(Th, P1);
+Vh u1, u2;
+Vh v1, v2;
+Vh u1o,u2o;
+Vh dsf,asf;
+// Define u and v as piecewise-P1 continuous functions
+
+// Define a macro conversion that converts a float between 0 and 1 to the pixel nr
+macro convy(x) (floor(x)) //
+macro convx(y) (nx-1-floor(y)) // 
+macro pte(x,y) (x*ny+y) //
+//pte is pixel in image to entry of vector
+//without ghost pixels now
+//convx looks that way because we need to transform from domain to matrix
+
+func real Ix (real x, real y) { //change of y to x position because matrix stores values the other way round
+	real result;
+	int pix = convx(y);
+	int piy = convy(x);
+	
+	
+	if (piy == (ny - 1)) { //Deals with the ghost cell problem
+		piy = piy - 1;
+	} 
+	if (pix == (nx - 1)) {
+		pix = pix - 1;
+	}
+
+	int entry = pte(pix,piy); //get the entry of the brightness vector 
+	
+	result =  bvA[entry+1] - bvA[entry] + bvA[entry+ny+1] - bvA[entry+ny]
+			+ bvB[entry+1] - bvB[entry] + bvB[entry+ny+1] - bvB[entry+ny];
+
+	return result/4; //div by 4 here because it didnt work otherwise
+}
+
+func real Iy (real x, real y) { //change of y to x position because matrix stores values the other way round
+	real result;
+	int pix = convx(y);
+	int piy = convy(x);
+	
+	
+	if (piy == (ny - 1)) { //Deals with the ghost cell problem
+		piy = piy - 1;
+	} 
+	if (pix == (nx - 1)) {
+		pix = pix - 1;
+	}
+
+	int entry = pte(pix,piy); //get the entry of the brightness vector 
+	
+	result =  - bvA[entry+ny] + bvA[entry] - bvA[entry+ny+1] + bvA[entry+1]
+			- bvB[entry+ny] + bvB[entry] - bvB[entry+ny+1] + bvB[entry+1];
+	return result/4; //div by 4 here because it didnt work otherwise
+}
+
+func real It (real x, real y) { //change of y to x position because matrix stores values the other way round
+	real result;
+	int pix = convx(y);
+	int piy = convy(x);
+	
+	
+	if (piy == (ny - 1)) { //Deals with the ghost cell problem
+		piy = piy - 1;
+	} 
+	if (pix == (nx - 1)) {
+		pix = pix - 1;
+	}
+
+	int entry = pte(pix,piy); //get the entry of the brightness vector 
+	
+	result =  bvB[entry] - bvA[entry] + bvB[entry+ny] - bvA[entry+ny]
+			+ bvB[entry+1] - bvA[entry+1] + bvB[entry+ny+1] - bvA[entry+ny+1];
+	return result/4; //div by 4 here because it didnt work otherwise
+}
+
+func real diff() {
+	real dif, aenum, aedenom, ae;
+	for (int i = 0; i < u1[].n; i++) {
+		aenum = u1[][i] * u1o[][i] + u2[][i] * u2o[][i];
+		aedenom = sqrt(u1[][i]^2 + u2[][i]^2) * sqrt(u1o[][i]^2 + u2o[][i]^2);
+		ae = acos(aenum/aedenom);
+		dif = sqrt(u1[][i]^2 + u2[][i]^2) - sqrt(u1o[][i]^2 + u2o[][i]^2);
+		dsf[][i] = dif; //difference scalar field
+		asf[][i] = ae; //angular difference scalar field
+	}
+	plot(dsf,wait=debug,fill=1,value=1);
+	plot(asf,wait=debug,fill=1,value=1);
+}
+
+//Define the PDE
+problem HSOF([u1, u2], [v1, v2], solver=GMRES)
+    = int2d(Th)(a^2 * (    // The bilinear part
+          dx(u1)*dx(v1)
+        + dy(u1)*dy(v1) 
+		+ dx(u2)*dx(v2)
+        + dy(u2)*dy(v2))
+	+ Ix(x,y)*Iy(x,y)*(u2*v1 + u1*v2)
+	+ Ix(x,y)^2*u1*v1
+	+ Iy(x,y)^2*u2*v2
+    )
+    + int2d(Th)(    // The right hand side
+          Ix(x,y)*It(x,y)*v1+Iy(x,y)*It(x,y)*v2
+    )
+    ; 
+
+cout << "\n";
+cout << "Un-Weighted; c = " << c << "; a = " << a << "; Tri = " << tri1 << ";";
+cout << "\n" << "\n";
+
+for (int i = 0; i < 2; i++) {
+	HSOF;
+	plot([u1,u2],wait=debug,value=1,nbarrow=10,cmm="Unweighted");
+	if (i > 0) {
+		diff();
+	}
+	u1o[] = u1[];
+	u2o[] = u2[];
+	c = 2;
+	bvA = c*brightA;
+	bvB = c*brightB;
+}
+
+// Plot the result
+//plot(u2,wait=debug);
